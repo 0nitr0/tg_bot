@@ -20,7 +20,7 @@ from aiogram.types import (
 # =========================
 logging.basicConfig(level=logging.INFO)
 
-TOKEN = os.getenv("TELEGRAM_TOKEN", "PASTE_YOUR_TOKEN_HERE")  # Render: set env TELEGRAM_TOKEN
+TOKEN = os.getenv("TELEGRAM_TOKEN", "7641482807:AAHfpmCKyIozprig39kzozh8lPeDCufijZE")  # Render: set env TELEGRAM_TOKEN
 PORT = int(os.getenv("PORT", "8080"))                         # Render provides PORT for web
 
 if not TOKEN or TOKEN == "PASTE_YOUR_TOKEN_HERE":
