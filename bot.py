@@ -1,168 +1,347 @@
+# bot.py — aiogram 3.x + Flask keep-alive for Render
 import os
 import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.filters import Command
+import logging
+import random
+import threading
+from flask import Flask
 
-# Загружаем токен из переменных окружения Render
-TOKEN = os.getenv("BOT_TOKEN")
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command
+from aiogram.types import (
+    Message,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
+)
+
+# =========================
+# ENV & LOGGING
+# =========================
+logging.basicConfig(level=logging.INFO)
+
+TOKEN = os.getenv("TELEGRAM_TOKEN", "PASTE_YOUR_TOKEN_HERE")  # Render: set env TELEGRAM_TOKEN
+PORT = int(os.getenv("PORT", "8080"))                         # Render provides PORT for web
+
+if not TOKEN or TOKEN == "PASTE_YOUR_TOKEN_HERE":
+    print("⚠️ Поставь токен в переменную окружения TELEGRAM_TOKEN!")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ====== Логика сюжета ======
-quest = {
+# =========================
+# Flask keep-alive (Render)
+# =========================
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "Бот работает! 💡"
+
+def run_web():
+    app.run(host="0.0.0.0", port=PORT)
+
+threading.Thread(target=run_web, daemon=True).start()
+
+
+# =========================
+# GAME DATA
+# =========================
+# состояние игрока: scene + стек истории
+user_state: dict[int, dict] = {}
+
+def end_text(base: str) -> str:
+    return f"{base}\n\n/restart - начать заново"
+
+death_reasons = [
+    "тебя сбила машина", "на тебя упал метеорит", "пришельцы похитили тебя",
+    "призрак охладел твоё сердце", "ты умер от скуки", "тебя предали друзья",
+    "тебя съел гигантский паук", "твоё сердце остановилось", "взрыв уничтожил всё вокруг",
+    "ты растворился во времени", "древний культ принёс тебя в жертву",
+    "неправильный химический эксперимент взорвался", "лестница внезапно оборвалась",
+    "в лифте отключилось притяжение", "ты шагнул в неверную реальность",
+    "бесконечная реклама довела до летального исхода", "умер от перфекционизма",
+    "голем из бетона раздавил тебя", "система решила удалить тебя как баг",
+    "ты не прошёл проверку на человечность",
+]
+
+def death_line() -> str:
+    reason = random.choice(death_reasons)
+    variants = [
+        f"⚰️ Ты умер, потому что {reason}.",
+        f"☠️ Конец. Причина: {reason}.",
+        f"💀 Жизнь оборвалась — {reason}.",
+        f"🔥 Последний миг настал: {reason}.",
+    ]
+    return end_text(random.choice(variants))
+
+# Каркас квеста
+quest: dict[str, dict] = {
     "start": {
-        "text": "Ты подросток в школе. У тебя есть выбор: пойти учиться или прогулять.",
+        "text": "Ты просыпаешься в реальности выборов. С чего начнёшь?",
         "options": {
-            "Учиться": "study_school",
-            "Прогулять": "skip_school"
-        }
+            "Сдать школьный тест": "school_test",
+            "Искать первую подработку": "job_search",
+            "Пойти в парк": "park_intro",
+            "Остаться дома": "home_intro",
+        },
     },
-    "study_school": {
-        "text": "Ты учился хорошо. У тебя появился шанс поступить в университет. Что выберешь?",
+
+    # Немного именованных сцен (жизненные темы + наследство)
+    "school_test": {
+        "text": "Учитель раздаёт тесты. Твои действия?",
         "options": {
-            "Поступить в универ": "university",
-            "Пойти работать сразу": "work_early"
-        }
+            "Списать у соседа": "caught_cheat",
+            "Честно решать": "honest_pass",
+            "Прогулять экзамен": "skip_exam",
+        },
     },
-    "skip_school": {
-        "text": "Ты прогуливал и плохо учился. Тебе тяжело найти нормальную работу. Что будешь делать?",
+    "caught_cheat": {
+        "text": death_line(),
+        "options": {},
+    },
+    "honest_pass": {
+        "text": "Ты сдал достойно. Куда дальше повернёт жизнь?",
         "options": {
-            "Пойти работать где получится": "hard_job",
-            "Попробовать исправиться и доучиться": "study_late"
-        }
+            "Университет": "uni_path",
+            "Карьера сразу": "career_now",
+            "Путешествовать автостопом": "travel_start",
+        },
     },
-    "university": {
-        "text": "В университете тебе нужно выбрать профессию. Кем станешь?",
+    "skip_exam": {
+        "text": death_line(),
+        "options": {},
+    },
+
+    "uni_path": {
+        "text": "Сессии, проекты, выбор специализации?",
         "options": {
-            "Программист": "dev_path",
-            "Врач": "doctor_path",
-            "Художник": "artist_path"
-        }
+            "Data Science": "ds_track",
+            "Биомедицина": "bio_track",
+            "Искусство": "art_track",
+            "Бросить универ": "drop_uni",
+        },
     },
-    "work_early": {
-        "text": "Ты пошёл работать на завод. Жизнь тяжёлая, но стабильная.",
+    "career_now": {
+        "text": "Первая работа, мало сна. Что приоритет?",
         "options": {
-            "Продолжить работать": "factory_life",
-            "Попробовать учиться заочно": "evening_school"
-        }
+            "Деньги любой ценой": "money_max",
+            "Баланс": "balance_life",
+            "Семья": "family_start",
+        },
     },
-    "dev_path": {
-        "text": "Ты выбрал профессию программиста. Началась интересная, но стрессовая жизнь в IT.",
+    "travel_start": {
+        "text": "Дороги, случайные попутчики, вечерний автостоп...",
         "options": {
-            "Стартап": "startup",
-            "Работа в корпорации": "corporation"
-        }
+            "Ехать дальше в ночь": "night_ride",
+            "Остановиться у костра": "camp_fire",
+            "Вернуться домой": "home_intro",
+        },
     },
-    "doctor_path": {
-        "text": "Ты стал врачом. Жизнь полна ответственности и вызовов.",
+
+    "ds_track": {"text": death_line(), "options": {}},
+    "bio_track": {"text": death_line(), "options": {}},
+    "art_track": {"text": death_line(), "options": {}},
+    "drop_uni": {"text": death_line(), "options": {}},
+
+    "money_max": {"text": death_line(), "options": {}},
+    "balance_life": {"text": death_line(), "options": {}},
+
+    "family_start": {
+        "text": "Годы спустя вопрос наследства. На кого оформить?",
         "options": {
-            "Работать в больнице": "hospital",
-            "Открыть частную клинику": "private_clinic"
-        }
+            "На старшего сына": "will_son",
+            "На младшую дочь": "will_daughter",
+            "Поровну на всех": "will_split",
+            "На благотворительный фонд": "will_fund",
+        },
     },
-    "artist_path": {
-        "text": "Ты стал художником. Жизнь полна творчества, но и нестабильности.",
+    "will_son": {"text": death_line(), "options": {}},
+    "will_daughter": {"text": death_line(), "options": {}},
+    "will_split": {"text": death_line(), "options": {}},
+    "will_fund": {"text": death_line(), "options": {}},
+
+    "night_ride": {"text": death_line(), "options": {}},
+    "camp_fire": {"text": death_line(), "options": {}},
+
+    "job_search": {
+        "text": "Подработки: курьер, бариста, фриланс?",
         "options": {
-            "Выставки": "exhibitions",
-            "Работа на заказ": "commissions"
-        }
+            "Курьер": "courier_path",
+            "Бариста": "barista_path",
+            "Фриланс": "freelance_path",
+        },
     },
-    "hard_job": {
-        "text": "Ты работаешь разнорабочим. Тяжело, но даёт опыт.",
+    "courier_path": {"text": death_line(), "options": {}},
+    "barista_path": {"text": death_line(), "options": {}},
+    "freelance_path": {"text": death_line(), "options": {}},
+
+    "park_intro": {
+        "text": "В парке к тебе подходит странный человек...",
         "options": {
-            "Продолжать": "ordinary_life",
-            "Искать шанс": "chance_life"
-        }
+            "Поговорить": "mystery_person",
+            "Игнорировать": "ignore_stranger",
+            "Попросить совета": "ask_advice",
+        },
     },
-    "study_late": {
-        "text": "Ты решил исправиться и снова учиться. Это было сложно, но у тебя появился шанс на будущее.",
+    "mystery_person": {"text": death_line(), "options": {}},
+    "ignore_stranger": {"text": death_line(), "options": {}},
+    "ask_advice": {"text": death_line(), "options": {}},
+
+    "home_intro": {
+        "text": "Дома тихо. В голове тысячи мыслей. Что сделать?",
         "options": {
-            "Поступить в колледж": "college",
-            "Пойти в армию": "army"
-        }
+            "Начать дневник": "journal_start",
+            "Позвонить родителям": "call_parents",
+            "Лечь спать": "sleep_now",
+        },
     },
-    # Финалы
-    "startup": {
-        "text": "Ты основал стартап, рисковал — и добился успеха. Ты миллионер!",
-        "options": {}
-    },
-    "corporation": {
-        "text": "Ты работаешь в корпорации. Хорошая зарплата, но нет свободы.",
-        "options": {}
-    },
-    "hospital": {
-        "text": "Ты врач в больнице. Уважаемая и стабильная работа.",
-        "options": {}
-    },
-    "private_clinic": {
-        "text": "Ты открыл частную клинику и разбогател.",
-        "options": {}
-    },
-    "exhibitions": {
-        "text": "Ты стал известным художником, твои картины покупают в галереях.",
-        "options": {}
-    },
-    "commissions": {
-        "text": "Ты рисуешь на заказ. Доход небольшой, но душа спокойна.",
-        "options": {}
-    },
-    "factory_life": {
-        "text": "Ты всю жизнь проработал на заводе. У тебя стабильность, но без больших достижений.",
-        "options": {}
-    },
-    "evening_school": {
-        "text": "Ты закончил вечернюю школу и получил шанс сменить профессию.",
-        "options": {
-            "Пойти в универ": "university"
-        }
-    },
-    "ordinary_life": {
-        "text": "Ты прожил обычную жизнь без особых успехов.",
-        "options": {}
-    },
-    "chance_life": {
-        "text": "Ты рискнул, нашёл новые возможности и изменил свою жизнь к лучшему.",
-        "options": {}
-    },
-    "college": {
-        "text": "Ты закончил колледж и получил профессию.",
-        "options": {}
-    },
-    "army": {
-        "text": "Ты пошёл в армию. Это изменило твою жизнь.",
-        "options": {}
-    }
+    "journal_start": {"text": death_line(), "options": {}},
+    "call_parents": {"text": death_line(), "options": {}},
+    "sleep_now": {"text": death_line(), "options": {}},
 }
 
-# ====== Клавиатура ======
-def get_keyboard(options: dict):
-    keyboard = [[KeyboardButton(text=option)] for option in options.keys()]
-    return ReplyKeyboardMarkup(
-        keyboard=keyboard,
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
+# Секретные концовки (мистика/НЛО) — тоже смерть
+secret_nodes = {
+    "secret_ufo": end_text("👽 НЛО вырвало тебя из реальности. В холодном космосе дыхание кончилось."),
+    "secret_cult": end_text("🕯 Древний культ нашёл тебя. Ритуал завершён."),
+    "secret_time": end_text("⏳ Ты застрял вне времени и… исчез."),
+    "secret_glitch": end_text("🧩 Мир оказался симуляцией. Тебя удалили как ошибку."),
+}
 
-# ====== Хендлеры ======
+for key, text in secret_nodes.items():
+    quest[key] = {"text": text, "options": {}}
+
+# Автогенерация огромного числа сцен и смертей
+NUM_SCENES = 400            # при желании увеличивай до 800+ (осторожно с памятью)
+CHOICES_PER_SCENE = 4
+CONTINUE_PROB = 0.35        # шанс, что выбор ведёт дальше, не к смерти
+
+random_death_keys: list[str] = []
+
+for i in range(1, NUM_SCENES + 1):
+    scene_key = f"S{i}"
+    quest[scene_key] = {"text": f"Сцена #{i}. Твой выбор?", "options": {}}
+    for j in range(1, CHOICES_PER_SCENE + 1):
+        if random.random() < CONTINUE_PROB and i < NUM_SCENES - 1:
+            # переходим в любую более позднюю сцену
+            nxt = f"S{random.randint(i + 1, NUM_SCENES)}"
+            quest[scene_key]["options"][f"Выбор {j}"] = nxt
+        else:
+            # смерть
+            dkey = f"D{i}_{j}"
+            quest[scene_key]["options"][f"Выбор {j}"] = dkey
+            quest[dkey] = {"text": death_line(), "options": {}}
+            random_death_keys.append(dkey)
+
+# Свяжем «реальные» ветки с автогенератором, чтобы игра была гигантской
+quest["honest_pass"]["options"]["Резко изменить судьбу"] = "S1"
+quest["career_now"]["options"]["Сменить трек"] = "S10"
+quest["park_intro"]["options"]["Идти в неизвестность"] = "S25"
+quest["home_intro"]["options"]["Выйти из дома и идти"] = "S50"
+quest["job_search"]["options"]["Резкий поворот"] = "S75"
+quest["uni_path"]["options"]["Случайное решение"] = "S100"
+
+# Вероятности внезапных событий
+RANDOM_EVENT_PROB = 0.10
+SECRET_EVENT_PROB = 0.03
+secret_list = list(secret_nodes.keys())
+
+
+# =========================
+# UI HELPERS
+# =========================
+def kb_options(options: dict | None) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
+    if not options:
+        # в концовках показываем /restart и «Назад»
+        return ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="/restart")],
+                [KeyboardButton(text="⬅️ Назад")],
+            ],
+            resize_keyboard=True,
+        )
+    rows = [[KeyboardButton(text=opt)] for opt in options.keys()]
+    rows.append([KeyboardButton(text="⬅️ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+async def send_scene(user_id: int, message: Message):
+    data = user_state[user_id]
+    node = quest[data["scene"]]
+    await message.answer(node["text"], reply_markup=kb_options(node.get("options")))
+
+
+# =========================
+# HANDLERS
+# =========================
 @dp.message(Command("start"))
-async def start_game(message: types.Message):
-    scene = quest["start"]
-    await message.answer(scene["text"], reply_markup=get_keyboard(scene["options"]))
+async def cmd_start(message: Message):
+    user_state[message.from_user.id] = {"scene": "start", "history": []}
+    await message.answer("🎮 Добро пожаловать. Любой финал — смерть. Удачи…")
+    await send_scene(message.from_user.id, message)
+
+
+@dp.message(Command("restart"))
+async def cmd_restart(message: Message):
+    user_state[message.from_user.id] = {"scene": "start", "history": []}
+    await message.answer("🔄 Игра начата заново.")
+    await send_scene(message.from_user.id, message)
+
+
+@dp.message(Command("back"))
+async def cmd_back(message: Message):
+    data = user_state.get(message.from_user.id)
+    if not data or not data["history"]:
+        await message.answer("❌ Назад нельзя — вы в начале.")
+        return
+    data["scene"] = data["history"].pop()
+    await message.answer("🔙 Шаг назад.")
+    await send_scene(message.from_user.id, message)
+
 
 @dp.message()
-async def play(message: types.Message):
-    for scene_name, scene in quest.items():
-        if message.text in scene.get("options", {}):
-            next_scene = quest[scene["options"][message.text]]
-            await message.answer(next_scene["text"], reply_markup=get_keyboard(next_scene.get("options", {})))
-            return
-    await message.answer("Я не понял твой выбор. Попробуй снова.")
+async def any_text(message: Message):
+    uid = message.from_user.id
+    data = user_state.get(uid)
+    if not data:
+        await message.answer("Напиши /start чтобы начать игру.")
+        return
 
-# ====== Запуск ======
+    # Кнопка «Назад»
+    if message.text.strip() == "⬅️ Назад":
+        await cmd_back(message)
+        return
+
+    current = quest[data["scene"]]
+    options = current.get("options", {})
+
+    if message.text not in options:
+        await message.answer("Выбери один из вариантов на клавиатуре.")
+        return
+
+    # потенциальный форс-мажор/секрет — только если это не концовка
+    next_key = options[message.text]
+
+    if quest.get(next_key, {}).get("options", None):  # не концовка
+        # секретная ветка с небольшим шансом
+        if random.random() < SECRET_EVENT_PROB:
+            next_key = random.choice(secret_list)
+        # внезапная смерть (форс-мажор)
+        elif random.random() < RANDOM_EVENT_PROB and random_death_keys:
+            next_key = random.choice(random_death_keys)
+
+    # записываем историю и двигаемся
+    data["history"].append(data["scene"])
+    data["scene"] = next_key
+    await send_scene(uid, message)
+
+
+# =========================
+# RUN
+# =========================
 async def main():
-    print("Бот запущен...")
+    print("Бот запущен…")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
