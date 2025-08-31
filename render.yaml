@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: tg-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false   # укажи в Dashboard
+      - key: BASE_URL
+        sync: false   # укажи в Dashboard, например https://tg-bot-xm6j.onrender.com
+    healthCheckPath: /
+    healthCheckInterval: 30s
+    autoDeploy: true
